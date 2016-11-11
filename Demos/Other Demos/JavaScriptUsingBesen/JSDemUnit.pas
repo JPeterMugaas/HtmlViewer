@@ -1,7 +1,6 @@
 {
 Version   11.7
-Copyright (c) 1995-2008 by L. David Baldwin
-Copyright (c) 2008-2016 by HtmlViewer Team
+Copyright (c) 2016 by B.Gabriel
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -24,11 +23,14 @@ Note that the source modules HTMLGIF1.PAS and DITHERUNIT.PAS
 are covered by separate copyright notices located in those modules.
 }
 
-unit FDemUnit;
+unit JSDemUnit;
 
-{$include ..\..\source\htmlcons.inc}
+{$include ..\..\..\source\htmlcons.inc}
 
-{A program to demonstrate the TFrameViewer component}
+{ A program to experiment with the TFrameViewer component and JavaScript
+  using Benjamin 'BeRo' Rosseaux's ECMAScript implementation TBesen
+  (https://github.com/BeRo1985/besen)
+}
 
 interface
 
@@ -70,6 +72,17 @@ uses
 {$else UseTNT}
   Submit,
 {$endif UseTNT}
+  BESEN,
+  BESENConstants,
+  BESENErrors,
+  BESENNumberUtils,
+  BESENObject,
+  BESENObjectPropertyDescriptor,
+  BESENStringUtils,
+  BESENValue,
+  BESENVersionConstants,
+  //
+  IniFiles,
   HtmlGlobals,
   HtmlBuffer,
   URLSubs,
@@ -82,12 +95,17 @@ uses
   FramView,
   Htmlabt,
   PrintStatusForm,
-  ImgForm;
+  ImgForm,
+  LogFormUnit;
 
 const
   MaxHistories = 6;  {size of History list}
 
 type
+
+  ThtScriptEngine = class(TBesen)
+  end;
+
 // Delphi 6 form editor fails with conditionals in form declaration:
 {$ifdef UseTNT}
     TBaseForm = TTntForm;
@@ -95,9 +113,9 @@ type
     TBaseForm = class(TForm);
 {$endif}
 
-  { TForm1 }
+  { TFormJSDemo }
 
-  TForm1 = class(TBaseForm)
+  TFormJSDemo = class(TBaseForm)
     About1: TMenuItem;
     BackButton: TButton;
     CopyImagetoclipboard: TMenuItem;
@@ -132,6 +150,9 @@ type
     SelectAllItem: TMenuItem;
     SetPrintScale: TMenuItem;
     Showimages: TMenuItem;
+    ShowLog: TMenuItem;
+    LogDiag: TMenuItem;
+    LogScript: TMenuItem;
     Timer1: TTimer;
     ViewImage: TMenuItem;
 {$ifdef VCL}
@@ -185,6 +206,7 @@ type
 {$ifdef UNICODE}
     procedure FrameViewerInclude(Sender: TObject; const Command: String; Params: TStrings; out IncludedDocument: TBuffer);
     procedure FrameViewerObjectClick(Sender, Obj: TObject; const OnClick: string);
+    procedure FrameViewerScript(Sender: TObject; const Name, ContentType, Src, Script: string);
     procedure HotSpotTargetCovered(Sender: TObject; const Target, URL: String);
     procedure HotSpotTargetClick(Sender: TObject; const Target, URL: String; var Handled: Boolean);
     procedure SoundRequest(Sender: TObject; const SRC: String; Loop: Integer; Terminate: Boolean);
@@ -193,6 +215,7 @@ type
 {$else}
     procedure FrameViewerInclude(Sender: TObject; const Command: WideString; Params: TWideStrings; out IncludedDocument: TBuffer);
     procedure FrameViewerObjectClick(Sender, Obj: TObject; const OnClick: WideString);
+    procedure FrameViewerScript(Sender: TObject; const Name, ContentType, Src, Script: WideString);
     procedure HotSpotTargetCovered(Sender: TObject; const Target, URL: WideString);
     procedure HotSpotTargetClick(Sender: TObject; const Target, URL: WideString; var Handled: Boolean);
     procedure SoundRequest(Sender: TObject; const SRC: WideString; Loop: Integer; Terminate: Boolean);
@@ -202,6 +225,9 @@ type
     procedure mmiQuirksModeDetectClick(Sender: TObject);
     procedure mmiQuirksModeStandardsClick(Sender: TObject);
     procedure mmiQuirksModeQuirksClick(Sender: TObject);
+    procedure ShowLogClick(Sender: TObject);
+    procedure LogDiagClick(Sender: TObject);
+    procedure LogScriptClick(Sender: TObject);
   private
     { Private declarations }
     Histories: array[0..MaxHistories-1] of TMenuItem;
@@ -210,11 +236,11 @@ type
 {$ifdef MsWindows}
   {$ifdef LCL}
   {$else}
-    MediaCount: integer;
+    MediaCount: Integer;
     ThePlayer: TOBject;
   {$endif}
 {$endif}
-    TimerCount: integer;
+    TimerCount: Integer;
     OldTitle: ThtString;
     HintWindow: ThtHintWindow;
     HintVisible: boolean;
@@ -222,20 +248,28 @@ type
 {$ifdef UseTNT}
     TntLabel: TTntLabel;
 {$endif}
+    JavaScript: ThtScriptEngine;
     procedure UpdateCaption;
     procedure wmDropFiles(var Message: TMessage); message wm_DropFiles;
     procedure CloseAll;
+    procedure LoadIniFile;
+    procedure SaveIniFile;
 {$ifdef LCL}
 {$else}
     procedure AppMessage(var Msg: TMsg; var Handled: Boolean);
 {$endif}
+    procedure JSInit;
+    procedure NativeAlert(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
+    procedure NativeConfirm(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
+    procedure NativePrompt(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
   protected
     procedure UpdateActions; override;
   public
+    FIniFilename: string;
   end;
 
 var
-  Form1: TForm1;
+  FormJSDemo: TFormJSDemo;
 
 implementation
 
@@ -253,9 +287,9 @@ uses
   {$ifend}
 {$endif}
 
-procedure TForm1.FormCreate(Sender: TObject);
+procedure TFormJSDemo.FormCreate(Sender: TObject);
 var
-  I: integer;
+  I: Integer;
 begin
   Left := Left div 2;
   Top := Top div 2;
@@ -279,6 +313,12 @@ begin
       Tag := I;
     end;
   end;
+
+  FIniFilename := ChangeFileExt(Application.Exename, '.ini');
+  LoadIniFile;
+
+  JSInit;
+
 {$ifdef LCL}
 {$else}
   DragAcceptFiles(Handle, True);
@@ -304,10 +344,168 @@ begin
 {$endif}
 end;
 
-procedure TForm1.FormShow(Sender: TObject);
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.LoadIniFile;
+var
+  IniFile: TIniFile;
+//  SL: TStringList;
+//  I, J: Integer;
+  LTop, LLeft, LWidth, LHeight: Integer;
+
+begin
+  IniFile := TIniFile.Create(FIniFileName);
+  try
+    Top    := IniFile.ReadInteger('MainForm', 'Top'   , Top   );
+    Left   := IniFile.ReadInteger('MainForm', 'Left'  , Left  );
+    Width  := IniFile.ReadInteger('MainForm', 'Width' , Width );
+    Height := IniFile.ReadInteger('MainForm', 'Height', Height);
+
+    LWidth  := Width  div 2;
+    LHeight := Height div 2;
+    LTop    := Top   + LWidth  div 2;
+    LLeft   := Left  + LHeight div 2;
+
+    LTop    := IniFile.ReadInteger('LogForm', 'Top'   , LTop   );
+    LLeft   := IniFile.ReadInteger('LogForm', 'Left'  , LLeft  );
+    LWidth  := IniFile.ReadInteger('LogForm', 'Width' , LWidth );
+    LHeight := IniFile.ReadInteger('LogForm', 'Height', LHeight);
+
+    LogForm := TLogForm.Create(Self, LTop, LLeft, LWidth, LHeight);
+
+    ShowLog.Checked   := IniFile.ReadBool('LogForm', 'ShowLogWindow' , ShowLog.Checked)  ;
+    LogDiag.Checked   := IniFile.ReadBool('LogForm', 'LogDiagnostics', LogDiag.Checked  );
+    LogScript.Checked := IniFile.ReadBool('LogForm', 'LogJavaScript' , LogScript.Checked);
+
+    LogForm.Visible := ShowLog.Checked;
+    LogForm.LogActive[laDiag] := LogDiag.Checked;
+    LogForm.LogActive[laJavaScript] := LogScript.Checked;
+
+//    SL := TStringList.Create;
+//    try
+//      IniFile.ReadSectionValues('Favorites', SL);
+//      for I := 0 to SL.Count-1 do
+//      begin
+//        J := Pos('=', SL[I]);
+//        UrlCombobox.Items.Add(Copy(SL[I], J+1, 1000));
+//      end;
+//    finally
+//      SL.Free;
+//    end;
+  finally
+    IniFile.Free;
+  end;
+end;
+
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.SaveIniFile;
+var
+  IniFile: TIniFile;
+//  I: Integer;
+begin       {save only if this is the first instance}
+  IniFile := TIniFile.Create(FIniFileName);
+  try
+    IniFile.WriteInteger('MainForm', 'Top'   , Top);
+    IniFile.WriteInteger('MainForm', 'Left'  , Left);
+    IniFile.WriteInteger('MainForm', 'Width' , Width);
+    IniFile.WriteInteger('MainForm', 'Height', Height);
+
+//    IniFile.WriteBool('Options', 'GetImagesAsyncly', GetImagesAsyncly.Checked);
+
+    IniFile.WriteInteger('LogForm', 'Top'   , LogForm.Top);
+    IniFile.WriteInteger('LogForm', 'Left'  , LogForm.Left);
+    IniFile.WriteInteger('LogForm', 'Width' , LogForm.Width);
+    IniFile.WriteInteger('LogForm', 'Height', LogForm.Height);
+
+    IniFile.WriteBool('LogForm', 'ShowLogWindow' , ShowLog.Checked  );
+    IniFile.WriteBool('LogForm', 'LogDiagnostics', LogDiag.Checked  );
+    IniFile.WriteBool('LogForm', 'LogJavaScript' , LogScript.Checked);
+
+//    IniFile.EraseSection('Favorites');
+//    for I := 0 to UrlCombobox.Items.Count - 1 do
+//      IniFile.WriteString('Favorites', 'Url'+IntToStr(I), UrlCombobox.Items[I]);
+  finally
+    IniFile.Free;
+  end;
+end;
+
+
+//-- BG ---------------------------------------------------------- 11.11.2016 --
+procedure TFormJSDemo.JSInit;
+var
+  ObjDocument, ObjNavigator, ObjWindow: TBESENObject;
+begin
+  JavaScript := ThtScriptEngine.Create(COMPAT_JS);
+
+  ObjWindow := JavaScript.ObjectGlobal;
+  ObjWindow.OverwriteData('window', BESENObjectValue(ObjWindow), [bopaWRITABLE,bopaCONFIGURABLE]);
+  ObjWindow.RegisterNativeFunction('alert'  , NativeAlert   , 1, []);
+  ObjWindow.RegisterNativeFunction('confirm', NativeConfirm , 1, []);
+  ObjWindow.RegisterNativeFunction('prompt' , NativePrompt  , 2, []);
+
+  ObjDocument := TBESENObject.Create(JavaScript, JavaScript.ObjectPrototype, false);
+  JavaScript.GarbageCollector.Add(ObjDocument);
+  ObjWindow.OverwriteData('document', BESENObjectValue(ObjDocument), [bopaWRITABLE,bopaCONFIGURABLE]);
+
+  ObjNavigator := TBESENObject.Create(JavaScript, JavaScript.ObjectPrototype, false);
+  JavaScript.GarbageCollector.Add(ObjNavigator);
+  ObjWindow.OverwriteData('navigator', BESENObjectValue(ObjNavigator), [bopaWRITABLE,bopaCONFIGURABLE]);
+  ObjNavigator.OverwriteData('userAgent', BESENStringValue('HtmlViewer, Version (V) ' + VersionNo + ', Copyright (C) 2016 by B.Gabriel'), [bopaWRITABLE,bopaCONFIGURABLE]);
+
+  LogForm.Log(JavaScript.ToStr(JavaScript.Eval('navigator.userAgent')));
+end;
+
+//-- BG ---------------------------------------------------------- 11.11.2016 --
+procedure TFormJSDemo.NativeAlert(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
+var
+  Message: ThtString;
+begin
+  if CountArguments > 0 then
+    Message := JavaScript.ToStr(Arguments^[0]^);
+
+{$ifdef LCL}
+  MessageDlg(Caption, Message, mtInformation, [mbOk], 0);
+{$else}
+  MessageBoxW(Handle, PWideChar(Message), PWideChar(Caption), MB_ICONINFORMATION + MB_OK);
+{$endif}
+  ResultValue.ValueType := bvtUNDEFINED;
+end;
+
+//-- BG ---------------------------------------------------------- 11.11.2016 --
+procedure TFormJSDemo.NativeConfirm(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
+var
+  Message: ThtString;
+  Result: Integer;
+begin
+  if CountArguments > 0 then
+    Message := JavaScript.ToStr(Arguments^[0]^);
+
+{$ifdef LCL}
+  Result := MessageDlg(Caption, Message, mtConfirmation, [mbYes, mbNo], 0);
+{$else}
+  Result := MessageBoxW(Handle, PWideChar(Message), PWideChar(Caption), MB_ICONQUESTION + MB_YESNO);
+{$endif}
+  ResultValue := BESENBooleanValue(Result = mrYes);
+end;
+
+//-- BG ---------------------------------------------------------- 11.11.2016 --
+procedure TFormJSDemo.NativePrompt(const ThisArgument: TBESENValue; Arguments: PPBESENValues; CountArguments: Integer; var ResultValue: TBESENValue);
+var
+  Message, Result: ThtString;
+begin
+  if CountArguments > 0 then
+    Message := JavaScript.ToStr(Arguments^[0]^);
+
+  if CountArguments > 1 then
+    Result := JavaScript.ToStr(Arguments^[1]^);
+
+  Result := InputBox(Caption, Message, Result);
+  ResultValue := BESENStringValue(Result);
+end;
+
+procedure TFormJSDemo.FormShow(Sender: TObject);
 var
   S: string;
-  I: integer;
+  I: Integer;
 begin
 if (ParamCount >= 1) then
   begin            {Parameter is file to load}
@@ -328,7 +526,7 @@ else if FileExists(ExtractFilePath(ParamStr(0))+'demo.htm') then
   FrameViewer.LoadFromFile(ExtractFilePath(ParamStr(0))+'demo.htm');
 end;
 
-procedure TForm1.OpenClick(Sender: TObject);
+procedure TFormJSDemo.OpenClick(Sender: TObject);
 begin
   if FrameViewer.CurrentFile <> '' then
     OpenDialog.InitialDir := ExtractFilePath(FrameViewer.CurrentFile)
@@ -342,7 +540,7 @@ begin
   end;
 end;
 
-procedure TForm1.HotSpotTargetClick(Sender: TObject; const Target, URL: ThtString; var Handled: boolean);
+procedure TFormJSDemo.HotSpotTargetClick(Sender: TObject; const Target, URL: ThtString; var Handled: boolean);
 {This routine handles what happens when a hot spot is clicked.  The assumption
  is made that DOS filenames are being used. .EXE, .WAV, .MID, and .AVI files are
  handled here, but other file types could be easily added.
@@ -357,7 +555,7 @@ var
   PC: array[0..255] of {$ifdef UNICODE} WideChar {$else} AnsiChar {$endif};
   uURL, S, Params: ThtString;
   Ext: string;
-  I, J, K: integer;
+  I, J, K: Integer;
 begin
   Handled := False;
 
@@ -406,7 +604,7 @@ begin
   Edit2.Text := URL;   {other protocall}
 end;
 
-procedure TForm1.HotSpotTargetCovered(Sender: TObject; const Target, URL: ThtString);
+procedure TFormJSDemo.HotSpotTargetCovered(Sender: TObject; const Target, URL: ThtString);
 {mouse moved over or away from a hot spot.  Change the status line}
 var
   Text: ThtString;
@@ -425,17 +623,17 @@ begin
 {$endif}
 end;
 
-procedure TForm1.Exit1Click(Sender: TObject);
+procedure TFormJSDemo.Exit1Click(Sender: TObject);
 begin
   Close;
 end;
 
-procedure TForm1.Find1Click(Sender: TObject);
+procedure TFormJSDemo.Find1Click(Sender: TObject);
 begin
   FindDialog.Execute;
 end;
 
-procedure TForm1.ReloadClick(Sender: TObject);
+procedure TFormJSDemo.ReloadClick(Sender: TObject);
 {the Reload button was clicked}
 begin
   ReloadButton.Enabled := False;
@@ -443,12 +641,12 @@ begin
   FrameViewer.SetFocus;
 end;
 
-procedure TForm1.CopyItemClick(Sender: TObject);
+procedure TFormJSDemo.CopyItemClick(Sender: TObject);
 begin
 FrameViewer.CopyToClipboard;
 end;
 
-procedure TForm1.Edit1Click(Sender: TObject);
+procedure TFormJSDemo.Edit1Click(Sender: TObject);
 begin
 with FrameViewer do
   begin
@@ -458,12 +656,12 @@ with FrameViewer do
   end;
 end;
 
-procedure TForm1.SelectAllItemClick(Sender: TObject);
+procedure TFormJSDemo.SelectAllItemClick(Sender: TObject);
 begin
 FrameViewer.SelectAll;
 end;
 
-procedure TForm1.FindDialogFind(Sender: TObject);
+procedure TFormJSDemo.FindDialogFind(Sender: TObject);
 begin
 with FindDialog do
   begin
@@ -472,7 +670,7 @@ with FindDialog do
   end;
 end;
 
-procedure TForm1.ShowimagesClick(Sender: TObject);
+procedure TFormJSDemo.ShowimagesClick(Sender: TObject);
 begin
 With FrameViewer do
   begin
@@ -481,10 +679,31 @@ With FrameViewer do
   end;
 end;
 
-procedure TForm1.HistoryChange(Sender: TObject);
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.ShowLogClick(Sender: TObject);
+begin
+  ShowLog.Checked := not ShowLog.Checked;
+  LogForm.Visible := ShowLog.Checked;
+end;
+
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.LogDiagClick(Sender: TObject);
+begin
+  LogDiag.Checked := not LogDiag.Checked;
+  LogForm.LogActive[laDiag] := LogDiag.Checked
+end;
+
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.LogScriptClick(Sender: TObject);
+begin
+  LogScript.Checked := not LogScript.Checked;
+  LogForm.LogActive[laJavaScript] := LogScript.Checked
+end;
+
+procedure TFormJSDemo.HistoryChange(Sender: TObject);
 {This event occurs when something changes history list}
 var
-  I: integer;
+  I: Integer;
   Cap: ThtString;
 begin
   with FrameViewer do
@@ -513,14 +732,14 @@ begin
   end;
 end;
 
-procedure TForm1.HistoryClick(Sender: TObject);
+procedure TFormJSDemo.HistoryClick(Sender: TObject);
 {A history list menuitem got clicked on}
 begin
   {Changing the HistoryIndex loads and positions the appropriate document}
   FrameViewer.HistoryIndex := (Sender as TMenuItem).Tag;
 end;
 
-procedure TForm1.About1Click(Sender: TObject);
+procedure TFormJSDemo.About1Click(Sender: TObject);
 begin
   with TAboutBox.CreateIt(Self, 'FrameDem', 'TFrameViewer') do
   try
@@ -530,7 +749,7 @@ begin
   end;
 end;
 
-procedure TForm1.FontsClick(Sender: TObject);
+procedure TFormJSDemo.FontsClick(Sender: TObject);
 var
   FontForm: TFontForm;
 begin
@@ -558,7 +777,7 @@ begin
   end;
 end;
 
-procedure TForm1.Print1Click(Sender: TObject);
+procedure TFormJSDemo.Print1Click(Sender: TObject);
 var
   Viewer: THtmlViewer;
 begin
@@ -567,13 +786,13 @@ begin
     PrintWithDialog(Self, PrintDialog, Viewer);
 end;
 
-procedure TForm1.File1Click(Sender: TObject);
+procedure TFormJSDemo.File1Click(Sender: TObject);
 begin
   Print1.Enabled := FrameViewer.ActiveViewer <> Nil;
   PrintPreview.Enabled := Print1.Enabled;
 end;
 
-procedure TForm1.SubmitEvent(Sender: TObject; const AnAction, Target, EncType, Method: ThtString; Results: ThtStringList);
+procedure TFormJSDemo.SubmitEvent(Sender: TObject; const AnAction, Target, EncType, Method: ThtString; Results: ThtStringList);
 begin
   with SubmitForm do
   begin
@@ -585,7 +804,7 @@ begin
   end;
 end;
 
-procedure TForm1.ProcessingHandler(Sender: TObject; ProcessingOn: Boolean);
+procedure TFormJSDemo.ProcessingHandler(Sender: TObject; ProcessingOn: Boolean);
 var
   Enabled: Boolean;
 begin
@@ -602,17 +821,17 @@ begin
   Open.Enabled := Enabled;
 end;
 
-procedure TForm1.FwdButtonClick(Sender: TObject);
+procedure TFormJSDemo.FwdButtonClick(Sender: TObject);
 begin
 FrameViewer.GoFwd;
 end;
 
-procedure TForm1.BackButtonClick(Sender: TObject);
+procedure TFormJSDemo.BackButtonClick(Sender: TObject);
 begin
 FrameViewer.GoBack;
 end;
 
-procedure TForm1.WindowRequest(Sender: TObject; const Target, URL: ThtString);
+procedure TFormJSDemo.WindowRequest(Sender: TObject; const Target, URL: ThtString);
 var
   S, Dest: ThtString;
 begin
@@ -627,7 +846,7 @@ begin
     end;
 end;
 
-procedure TForm1.wmDropFiles(var Message: TMessage);
+procedure TFormJSDemo.wmDropFiles(var Message: TMessage);
 {$ifdef LCL}
 begin
 {$else}
@@ -643,12 +862,12 @@ begin
   Message.Result := 0;
 end;
 
-procedure TForm1.CopyImagetoclipboardClick(Sender: TObject);
+procedure TFormJSDemo.CopyImagetoclipboardClick(Sender: TObject);
 begin
   Clipboard.Assign(FoundObject.Graphic);
 end;
 
-procedure TForm1.ViewImageClick(Sender: TObject);
+procedure TFormJSDemo.ViewImageClick(Sender: TObject);
 var
   AForm: TImageForm;
 begin
@@ -661,7 +880,7 @@ begin
   end;
 end;
 
-procedure TForm1.MediaPlayerNotify(Sender: TObject);
+procedure TFormJSDemo.MediaPlayerNotify(Sender: TObject);
 begin
 {$ifndef LCL}
   try
@@ -684,7 +903,7 @@ begin
 {$endif}
 end;
 
-procedure TForm1.SoundRequest(Sender: TObject; const SRC: ThtString; Loop: Integer; Terminate: Boolean);
+procedure TFormJSDemo.SoundRequest(Sender: TObject; const SRC: ThtString; Loop: Integer; Terminate: Boolean);
 begin
 {$ifndef LCL}
   try
@@ -714,7 +933,7 @@ begin
 {$endif}
 end;
 
-procedure TForm1.FrameViewerObjectClick(Sender, Obj: TObject; const OnClick: ThtString);
+procedure TFormJSDemo.FrameViewerObjectClick(Sender, Obj: TObject; const OnClick: ThtString);
 var
   S: ThtString;
   CB: TCheckBoxFormControlObj absolute Obj;
@@ -746,11 +965,11 @@ begin
       end;
 end;
 
-procedure TForm1.FrameViewerInclude(Sender: TObject; const Command: ThtString; Params: ThtStrings; out IncludedDocument: TBuffer);
+procedure TFormJSDemo.FrameViewerInclude(Sender: TObject; const Command: ThtString; Params: ThtStrings; out IncludedDocument: TBuffer);
 {OnInclude handler}
 var
   Filename: ThtString;
-  I: integer;
+  I: Integer;
   Stream: TFileStream;
 begin
   if htCompareText(Command, 'Date') = 0 then
@@ -778,7 +997,7 @@ begin
   end;
 end;
 
-procedure TForm1.FrameViewerRightClick(Sender: TObject; Parameters: TRightClickParameters);
+procedure TFormJSDemo.FrameViewerRightClick(Sender: TObject; Parameters: TRightClickParameters);
 var
   Pt: TPoint;
   S, Dest: ThtString;
@@ -826,17 +1045,58 @@ begin
   end;
 end;
 
-procedure TForm1.OpenInNewWindowClick(Sender: TObject);
+//-- BG ---------------------------------------------------------- 10.11.2016 --
+procedure TFormJSDemo.FrameViewerScript(Sender: TObject; const Name, ContentType, Src, Script: ThtString);
+var
+  MySrc, MyScript, MyMessage: string;
+  OldCursor: TCursor;
+begin
+  if Length(Script) > 0 then
+  begin
+    MySrc := Name;
+    MyScript := Script;
+  end
+  else if Length(Src) > 0 then
+  begin
+    MySrc := FrameViewer.HTMLExpandFilename(Src);
+    MyScript := BESENGetFileContent(MySrc);
+  end;
+
+  if Length(MyScript) > 0 then
+  begin
+    if LogForm.LogActive[laJavaScript] then
+      LogForm.Log('Executing ' + ContentType + ' "' + MySrc + '" ...');
+    try
+      OldCursor := Screen.Cursor;
+      Screen.Cursor := crHourGlass;
+      try
+        JavaScript.Execute(BESENConvertToUTF8(MyScript));
+      finally
+        Screen.Cursor := OldCursor;
+      end;
+      MyMessage := 'Done.';
+    except
+      on E: EBESENError do
+        MyMessage := E.Name + ': ' + E.Message;
+      on E: Exception do
+        MyMessage := 'Error: ' + E.Message;
+    end;
+    if LogForm.LogActive[laJavaScript] then
+      LogForm.Log(MyMessage);
+  end;
+end;
+
+procedure TFormJSDemo.OpenInNewWindowClick(Sender: TObject);
 begin
   StartProcess(ParamStr(0), '"' + NewWindowFile + '"');
 end;
 
-procedure TForm1.PrinterSetupClick(Sender: TObject);
+procedure TFormJSDemo.PrinterSetupClick(Sender: TObject);
 begin
   PrinterSetupDialog.Execute;
 end;
 
-procedure TForm1.PrintPreviewClick(Sender: TObject);
+procedure TFormJSDemo.PrintPreviewClick(Sender: TObject);
 {$ifndef NoMetaFile}
 var
 {$ifdef UseOldPreviewForm}
@@ -869,35 +1129,34 @@ begin
 {$endif !NoMetaFile}
 end;
 
-procedure TForm1.FrameViewerMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
+procedure TFormJSDemo.FrameViewerMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
 var
   TitleStr: ThtString;
 begin
-if not Timer1.Enabled and Assigned(ActiveControl) and ActiveControl.Focused
-         and (Sender is ThtmlViewer) then  
+  if not Timer1.Enabled and Assigned(ActiveControl) and ActiveControl.Focused and (Sender is ThtmlViewer) then
   begin
-  TitleViewer := ThtmlViewer(Sender);
-  TitleStr := TitleViewer.TitleAttr;
-  if TitleStr = '' then
-    OldTitle := ''
-  else if TitleStr <> OldTitle then
+    TitleViewer := THtmlViewer(Sender);
+    TitleStr := TitleViewer.TitleAttr;
+    if TitleStr = '' then
+      OldTitle := ''
+    else if TitleStr <> OldTitle then
     begin
-    TimerCount := 0;
-    Timer1.Enabled := True;
-    OldTitle := TitleStr;
+      TimerCount := 0;
+      Timer1.Enabled := True;
+      OldTitle := TitleStr;
     end;
   end;
 end;
 
-procedure TForm1.CloseAll;
+procedure TFormJSDemo.CloseAll;
 begin
-Timer1.Enabled := False;
-HintWindow.ReleaseHandle;
-HintVisible := False;
-TitleViewer := Nil;
+  Timer1.Enabled := False;
+  HintWindow.ReleaseHandle;
+  HintVisible := False;
+  TitleViewer := Nil;
 end;
 
-procedure TForm1.Timer1Timer(Sender: TObject);
+procedure TFormJSDemo.Timer1Timer(Sender: TObject);
 const
   StartCount = 2; {timer counts before hint window opens}
   EndCount = 20;  {after this many timer counts, hint window closes}
@@ -944,7 +1203,7 @@ except
   end;
 end;
 
-procedure TForm1.FrameViewerProgress(Sender: TObject;
+procedure TFormJSDemo.FrameViewerProgress(Sender: TObject;
   Stage: TProgressStage; PercentDone: Integer);
 begin
   ProgressBar.Position := PercentDone;
@@ -958,7 +1217,7 @@ begin
   ProgressBar.Update;
 end;
 
-procedure TForm1.SetPrintScaleClick(Sender: TObject);
+procedure TFormJSDemo.SetPrintScaleClick(Sender: TObject);
 var
   S: string;
 begin
@@ -987,7 +1246,7 @@ function ReplaceStr(const S, FromStr, ToStr: ThtString): ThtString;
 {replace FromStr with ToStr in string S.
  for Delphi 6, 7, AnsiReplaceStr may be used instead.}
 var
-  I: integer;
+  I: Integer;
 begin
   Result := S;
   I := Pos(FromStr, S);
@@ -998,8 +1257,8 @@ begin
   end;
 end;
 
-procedure TForm1.ViewerPrintHTMLHeader(Sender: TObject;
-  HFViewer: THTMLViewer; NumPage: Integer; LastPage: boolean; var XL, XR: integer; var StopPrinting: Boolean);
+procedure TFormJSDemo.ViewerPrintHTMLHeader(Sender: TObject;
+  HFViewer: THTMLViewer; NumPage: Integer; LastPage: boolean; var XL, XR: Integer; var StopPrinting: Boolean);
 var
   S: ThtString;
 begin
@@ -1008,8 +1267,8 @@ begin
   HFViewer.LoadFromString(S);
 end;
 
-procedure TForm1.ViewerPrintHTMLFooter(Sender: TObject;
-  HFViewer: THTMLViewer; NumPage: Integer; LastPage: boolean; var XL, XR: integer; var StopPrinting: Boolean);
+procedure TFormJSDemo.ViewerPrintHTMLFooter(Sender: TObject;
+  HFViewer: THTMLViewer; NumPage: Integer; LastPage: boolean; var XL, XR: Integer; var StopPrinting: Boolean);
 var
   S: ThtString;
 begin
@@ -1018,7 +1277,7 @@ begin
   HFViewer.LoadFromString(S);
 end;
 
-procedure TForm1.UpdateCaption;
+procedure TFormJSDemo.UpdateCaption;
 var
   Viewer: TFrameViewer;
   Title, Cap: ThtString;
@@ -1033,7 +1292,7 @@ begin
   else
     Title := '';
 
-  Cap := 'FrameViewer ' + VersionNo + ' Demo';
+  Cap := 'FrameViewer ' + VersionNo + ' &  Besen ' + BESENVersion + ' Demo';
   if Title <> '' then
     Cap := Cap + ' - ' + Title;
 {$ifdef LCL}
@@ -1043,40 +1302,45 @@ begin
 {$endif}
 end;
 
-procedure TForm1.FormDestroy(Sender: TObject);
+procedure TFormJSDemo.FormDestroy(Sender: TObject);
 begin
+  SaveIniFile;
   CloseAll;
 end;
 
 //-- BG ---------------------------------------------------------- 25.10.2012 --
-procedure TForm1.mmiQuirksModeDetectClick(Sender: TObject);
+procedure TFormJSDemo.mmiQuirksModeDetectClick(Sender: TObject);
 begin
   FrameViewer.QuirksMode := qmDetect;
   ReloadClick(nil);
 end;
 
 //-- BG ---------------------------------------------------------- 25.10.2012 --
-procedure TForm1.mmiQuirksModeStandardsClick(Sender: TObject);
+procedure TFormJSDemo.mmiQuirksModeStandardsClick(Sender: TObject);
 begin
   FrameViewer.QuirksMode := qmStandards;
   ReloadClick(nil);
 end;
 
 //-- BG ---------------------------------------------------------- 25.10.2012 --
-procedure TForm1.mmiQuirksModeQuirksClick(Sender: TObject);
+procedure TFormJSDemo.mmiQuirksModeQuirksClick(Sender: TObject);
 begin
   FrameViewer.QuirksMode := qmQuirks;
   ReloadClick(nil);
 end;
 
 //-- BG ---------------------------------------------------------- 25.10.2012 --
-procedure TForm1.UpdateActions;
+procedure TFormJSDemo.UpdateActions;
 var
   Viewer: TViewerBase;
   QuirksModeMenuItem: TMenuItem;
   IsDetectedQuirksMode: Boolean;
   QuirksModePanelCaption: string;
 begin
+  inherited;
+
+  ShowLog.Checked := LogForm.Visible;
+
   ReloadButton.Enabled := FrameViewer.CurrentFile <> '';
 
   // update quirks mode panel and quirks mode menu items
@@ -1136,7 +1400,7 @@ end;
 {$ifdef LCL}
 {$else}
 //-- BG ---------------------------------------------------------- 16.08.2015 --
-procedure TForm1.AppMessage(var Msg: TMsg; var Handled: Boolean);
+procedure TFormJSDemo.AppMessage(var Msg: TMsg; var Handled: Boolean);
 var
   WinCtrl: TWinControl;
 begin

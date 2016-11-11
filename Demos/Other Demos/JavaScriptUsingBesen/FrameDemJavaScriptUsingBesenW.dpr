@@ -32,22 +32,24 @@ Note that the source modules HTMLGIF1.PAS and DITHERUNIT.PAS
 are covered by separate copyright notices located in those modules.
 }
 
-program FrameDemW;
+program FrameDemJavaScriptUsingBesenW;
 
 {A program to demonstrate the TFrameViewer component}
 
 uses
   Forms,
-  FontDlg in 'FontDlg.pas' {FontForm},
-  HtmlAbt in 'HtmlAbt.pas' {AboutBox},
-  ImgForm in 'ImgForm.pas' {ImageForm},
-  Submit in 'Submit.pas' {SubmitForm},
-  FDemUnit in 'FDemUnit.pas' {Form1};
+  FontDlg in '..\..\Main Demos\FontDlg.pas' {FontForm},
+  HtmlAbt in '..\..\Main Demos\HtmlAbt.pas' {AboutBox},
+  ImgForm in '..\..\Main Demos\ImgForm.pas' {ImageForm},
+  Submit in '..\..\Main Demos\Submit.pas' {SubmitForm},
+  JSDemUnit in 'JSDemUnit.pas' {FormJSDemo},
+  PrintStatusForm in '..\..\Main Demos\PrintStatusForm.pas' {PrnStatusForm},
+  LogFormUnit in '..\..\Main Demos\LogFormUnit.pas' {LogForm};
 
 {$R *.RES}
 
 begin
   Application.Initialize;
-  Application.CreateForm(TForm1, Form1);
+  Application.CreateForm(TFormJSDemo, FormJSDemo);
   Application.Run;
 end.

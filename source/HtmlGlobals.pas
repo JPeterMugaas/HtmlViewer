@@ -77,6 +77,7 @@ uses
     {$endif}
   {$endif UseTNT}
 {$endif}
+  Clipbrd,
   Math;
 
 const
@@ -158,7 +159,9 @@ type
   ThtStringList = TStringList;
   PhtChar = PChar;
 {$else}
+{$if fpc_fullversion < 30000}
   UnicodeString = WideString;
+{$ifend}
   ThtChar = WideChar;
   ThtString = WideString;
   ThtStrings = TWideStrings;
@@ -239,6 +242,16 @@ type
   ThtCanvas = class(TCanvas)
   public
     procedure htTextRect(const Rect: TRect; X, Y: Integer; const Text: ThtString);
+  end;
+
+  ThtGraphic = class(TGraphic)
+{$ifdef LCL}
+  private
+    FTransparent: Boolean;
+  protected
+    function GetTransparent: Boolean; override;
+    procedure SetTransparent(Value: Boolean); override;
+{$endif}
   end;
 
   { ThtBitmap }
@@ -452,16 +465,22 @@ function TransparentStretchBlt(DstDC: HDC; DstX, DstY, DstW, DstH: Integer;
 procedure htAppendChr(var Dest: ThtString; C: ThtChar); {$ifdef UseInline} inline; {$endif}
 procedure htAppendStr(var Dest: ThtString; const S: ThtString); {$ifdef UseInline} inline; {$endif}
 procedure htSetString(var Dest: ThtString; Chr: PhtChar; Len: Integer); {$ifdef UseInline} inline; {$endif}
-function htCompareString(S1, S2: ThtString): Integer; {$ifdef UseInline} inline; {$endif}
-function htLowerCase(Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
-function htTrim(Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
-function htUpperCase(Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
+function htCompareStr(const S1, S2: ThtString): Integer; {$ifdef UseInline} inline; {$endif}
+function htCompareText(const S1, S2: ThtString): Integer; {$ifdef UseInline} inline; {$endif}
+function htSameText(const S1, S2: ThtString): Boolean; {$ifdef UseInline} inline; {$endif}
+function htLowerCase(const Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
+function htTrim(const Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
+function htUpperCase(const Str: ThtString): ThtString; {$ifdef UseInline} inline; {$endif}
 // htPos(SubStr, S, Offst): find substring in S starting at Offset: (formerly known as PosX)
 function htPos(const SubStr, S: ThtString; Offset: Integer = 1): Integer;
 
 function IsAlpha(Ch: ThtChar): Boolean; {$ifdef UseInline} inline; {$endif}
 function IsDigit(Ch: ThtChar): Boolean; {$ifdef UseInline} inline; {$endif}
 function RemoveQuotes(const S: ThtString): ThtString;
+
+function htStringArrayToStr(const StrArray: ThtStringArray; Separator: ThtChar): ThtString;
+function htSameStringArray(const A1, A2: ThtStringArray): Boolean;
+procedure htSortStringArray(A: ThtStringArray);
 
 //{$ifdef UnitConstsMissing}
 //const
@@ -486,7 +505,7 @@ procedure Circle(ACanvas : TCanvas; const X, Y, Rad: Integer); {$ifdef UseInline
 //alpha blend determination for Printers only
 function CanPrintAlpha(ADC : HDC) : Boolean; {$ifdef UseInline} inline; {$endif}
 
-procedure GetTSize(DC: HDC; P : PWideChar; N : Integer; var VSize : TSize);  {$ifdef UseInline} inline; {$endif}
+procedure GetTSize(DC: HDC; P : PWideChar; N : Integer; out VSize : TSize);  {$ifdef UseInline} inline; {$endif}
 
 function ThemedColor(const AColor : TColor
   {$ifdef has_StyleElements};const AUseThemes : Boolean{$endif}
@@ -494,6 +513,9 @@ function ThemedColor(const AColor : TColor
 
 function TextEndsWith(const SubStr, S : ThtString) : Boolean; {$ifdef UseInline} inline; {$endif}
 function TextStartsWith(const SubStr, S : ThtString) : Boolean; {$ifdef UseInline} inline; {$endif}
+
+procedure CopyToClipBoardAsHtml(const Str: UTF8String);
+procedure CopyToClipBoardAsText(const Str: ThtString);
 
 implementation
 
@@ -630,11 +652,13 @@ begin
 end;
 {$endif}
 
-procedure GetTSize(DC: HDC; P : PWideChar; N : Integer; var VSize : TSize);
+procedure GetTSize(DC: HDC; P : PWideChar; N : Integer; out VSize : TSize);
  {$ifdef UseInline} inline; {$endif}
 var
     Dummy: Integer;
 begin
+  VSize.cx := 0;
+  VSize.cy := 0;
   if not IsWin32Platform then
     GetTextExtentExPointW(DC, P, N, 0, @Dummy, nil, VSize)
   else
@@ -951,7 +975,7 @@ begin
 end;
 
 //-- BG ---------------------------------------------------------- 20.03.2011 --
-function htCompareString(S1, S2: ThtString): Integer;
+function htCompareStr(const S1, S2: ThtString): Integer;
  {$ifdef UseInline} inline; {$endif}
 begin
 {$ifdef UNICODE}
@@ -961,8 +985,93 @@ begin
 {$endif}
 end;
 
+//-- BG ---------------------------------------------------------- 10.12.2010 --
+function htCompareText(const S1, S2: ThtString): Integer;
+ {$ifdef UseInline} inline; {$endif}
+begin
+{$ifdef UNICODE}
+  Result := CompareText(S1, S2);
+{$else}
+  Result := WideCompareText(S1, S2);
+{$endif}
+end;
+
+//-- BG ---------------------------------------------------------- 10.10.2016 --
+function htSameText(const S1, S2: ThtString): Boolean;
+ {$ifdef UseInline} inline; {$endif}
+begin
+  Result := htCompareText(S1, S2) = 0;
+end;
+
+//-- BG ---------------------------------------------------------- 22.10.2016 --
+function htStringArrayToStr(const StrArray: ThtStringArray; Separator: ThtChar): ThtString;
+var
+  I: Integer;
+begin
+  SetLength(Result, 0);
+  for I := Low(StrArray) to high(StrArray) do
+  begin
+    if Length(Result) > 0 then
+      htAppendChr(Result, Separator);
+    htAppendStr(Result, StrArray[I]);
+  end;
+end;
+
+//-- BG ---------------------------------------------------------- 20.03.2011 --
+function htSameStringArray(const A1, A2: ThtStringArray): Boolean;
+var
+  I, N: Integer;
+begin
+  N := Length(A1);
+  Result := N = Length(A2);
+  if Result then
+    for I := 0 To N - 1 do
+      if htCompareStr(A1[I], A2[I]) <> 0 then
+      begin
+        Result := False;
+        break;
+      end;
+end;
+
+//-- BG ---------------------------------------------------------- 20.03.2011 --
+procedure htSortStringArray(A: ThtStringArray);
+
+  procedure QuickSort(L, R: Integer);
+  var
+    I, J: Integer;
+    P, T: ThtString;
+  begin
+    repeat
+      I := L;
+      J := R;
+      P := A[(L + R) shr 1];
+      repeat
+        while htCompareStr(A[I], P) < 0 do
+          Inc(I);
+        while htCompareStr(A[J], P) > 0 do
+          Dec(J);
+        if I <= J then
+        begin
+          T := A[I];
+          A[I] := A[J];
+          A[J] := T;
+          Inc(I);
+          Dec(J);
+        end;
+      until I > J;
+      if L < J then
+        QuickSort(L, J);
+      L := I;
+    until I >= R;
+  end;
+
+begin
+  if length(A) > 1 then
+    QuickSort(Low(A), High(A));
+end;
+
 //-- BG ---------------------------------------------------------- 28.01.2011 --
-function htLowerCase(Str: ThtString): ThtString;
+function htLowerCase(const Str: ThtString): ThtString;
  {$ifdef UseInline} inline; {$endif}
 begin
 {$ifdef UNICODE}
@@ -987,14 +1096,14 @@ begin
 end;
 
 //-- BG ---------------------------------------------------------- 09.08.2011 --
-function htTrim(Str: ThtString): ThtString;
+function htTrim(const Str: ThtString): ThtString;
  {$ifdef UseInline} inline; {$endif}
 begin
   Result := Trim(Str);
 end;
 
 //-- BG ---------------------------------------------------------- 28.01.2011 --
-function htUpperCase(Str: ThtString): ThtString;
+function htUpperCase(const Str: ThtString): ThtString;
  {$ifdef UseInline} inline; {$endif}
 begin
   {$ifdef UNICODE}
@@ -1204,6 +1313,7 @@ begin
       Process.Environment.Add(GetEnvironmentString(I));
 
     Process.Execute;
+    Result := True;
   finally
     Process.Free;
   end;
@@ -1228,6 +1338,96 @@ begin
   Result := CreateProcess(PChar(ApplicationName), PChar(CommandLine), nil, nil, False, 0, nil, nil, si, pi);
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
+end;
+{$endif}
+
+//-- BG ---------------------------------------------------------- 26.09.2016 --
+procedure CopyToClipBoardAsHtml(const Str: UTF8String);
+// Put SOURCE on the clipboard, using FORMAT as the clipboard format
+const
+  HtmlClipboardFormat = 'HTML Format';
+var
+  CF_HTML: UINT;
+  Len: Integer;
+{$ifdef LCL}
+  Str1: UTF8String;
+{$else}
+  Mem: HGLOBAL;
+  Buf: PAnsiChar;
+{$endif}
+begin
+  CF_HTML := RegisterClipboardFormat(HtmlClipboardFormat); {not sure this is necessary}
+  Len := Length(Str);
+{$ifdef LCL}
+  Str1 := Str;
+  Clipboard.AddFormat(CF_HTML, Str1[1], Len);
+{$else}
+  Mem := GlobalAlloc(GMEM_DDESHARE + GMEM_MOVEABLE, Len + 1);
+  try
+    Buf := GlobalLock(Mem);
+    try
+      Move(Str[1], Buf[0], Len);
+      Buf[Len] := #0;
+      SetClipboardData(CF_HTML, Mem);
+    finally
+      GlobalUnlock(Mem);
+    end;
+  except
+    GlobalFree(Mem);
+  end;
+{$endif}
+end;
+
+//-- BG ---------------------------------------------------------- 26.09.2016 --
+procedure CopyToClipboardAsText(const Str: ThtString);
+{$ifdef LCL}
+var
+  Utf8: Utf8String;
+begin
+  Utf8 := Utf8Encode(Str);
+  Clipboard.AsText := Utf8;
+end;
+{$else}
+var
+  Len: Integer;
+  Mem: HGLOBAL;
+  Wuf: PWideChar;
+begin
+  Len := Length(Str);
+  Mem := GlobalAlloc(GMEM_DDESHARE + GMEM_MOVEABLE, (Len + 1) * SizeOf(WideChar));
+  try
+    Wuf := GlobalLock(Mem);
+    try
+      Move(Str[1], Wuf[0], Len * SizeOf(WideChar));
+      Wuf[Len] := #0;
+      // BG, 28.06.2012: use API method. The vcl clipboard does not support multiple formats.
+      SetClipboardData(CF_UNICODETEXT, Mem);
+    finally
+      GlobalUnlock(Mem);
+    end;
+  except
+    GlobalFree(Mem);
+  end;
+end;
+{$endif}
+
+{ ThtGraphic }
+
+{$ifdef LCL}
+//-- BG ---------------------------------------------------------- 10.10.2016 --
+function ThtGraphic.GetTransparent: Boolean;
+begin
+  Result := FTransparent;
+end;
+
+//-- BG ---------------------------------------------------------- 10.10.2016 --
+procedure ThtGraphic.SetTransparent(Value: Boolean);
+begin
+  if FTransparent <> Value then
+  begin
+    FTransparent := Value;
+    Changed(Self);
+  end;
 end;
 {$endif}
 

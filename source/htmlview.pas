@@ -167,10 +167,10 @@ type
 
   ThvHistoryItem = class(THistoryItem)
   private
-    FFormData: TFreeList;
+    FFormData: TFormData;
   public
     destructor Destroy; override;
-    property FormData: TFreeList read FFormData write FFormData;
+    property FormData: TFormData read FFormData write FFormData;
   end;
 
   ThvHistory = class(THistory)
@@ -310,7 +310,7 @@ type
     function GetCursor: TCursor;
     function GetDocumentSource: ThtString;
     function GetFormControlList: TFormControlObjList;
-    function GetFormData: TFreeList;
+    function GetFormData: TFormData;
     function GetHScrollBarRange: Integer;
     function GetHScrollPos: Integer;
     function GetIDControl(const ID: ThtString): TIDObject;
@@ -326,6 +326,7 @@ type
     function GetScrollPos: Integer;
     function GetSelLength: Integer;
     function GetSelText: UnicodeString;
+    function GetSelHtml: UTF8String;
     function GetViewImages: Boolean;
     function GetWordAtCursor(X, Y: Integer; var St, En: Integer; out AWord: UnicodeString): Boolean;
     procedure BackgroundChange(Sender: TObject);
@@ -337,6 +338,7 @@ type
     procedure HTMLTimerTimer(Sender: TObject);
     procedure ImagesInsertedTimer(Sender: TObject);
     procedure Layout;
+    procedure MatchMediaQuery(Sender: TObject; const MediaQuery: ThtMediaQuery; var MediaMatchesQuery: Boolean);
     procedure Parsed(const Title, Base, BaseTarget: ThtString);
     procedure ParseXHtml;
     procedure ParseHtml;
@@ -347,7 +349,7 @@ type
     procedure SetBase(Value: ThtString);
     procedure SetBorderStyle(Value: THTMLBorderStyle);
     procedure SetCaretPos(Value: Integer);
-    procedure SetFormData(T: TFreeList);
+    procedure SetFormData(T: TFormData);
     procedure SetHistoryIndex(Value: Integer);
     procedure SetHScrollPos(Value: Integer);
     procedure SetIDDisplay(const ID: ThtString; Value: ThtDisplayStyle);
@@ -473,7 +475,7 @@ type
     function ShowFocusRect: Boolean; override;
     function XYToDisplayPos(X, Y: Integer): Integer;
     procedure AddVisitedLink(const S: ThtString);
-    procedure BumpHistory(const OldFileName, OldTitle: ThtString; OldPos: Integer; OldFormData: TFreeList; OldDocType: ThtmlFileType);
+    procedure BumpHistory(const OldFileName, OldTitle: ThtString; OldPos: Integer; OldFormData: TFormData; OldDocType: ThtmlFileType);
     procedure HistoryBack;
     procedure HistoryForward;
     procedure CheckVisitedLinks;
@@ -523,7 +525,7 @@ type
     property DocumentSource: ThtString read GetDocumentSource;
     property DocumentTitle: ThtString read FTitle;
     property FormControlList: TFormControlObjList read GetFormControlList;
-    property FormData: TFreeList read GetFormData write SetFormData;
+    property FormData: TFormData read GetFormData write SetFormData;
     property History: ThvHistory read FHistory;
     property HistoryIndex: Integer read GetHistoryIndex write SetHistoryIndex;
     property HScrollBarPosition: Integer read GetHScrollPos write SetHScrollPos;
@@ -545,6 +547,7 @@ type
     //property Processing: Boolean index vsProcessing read GetViewerStateBit; //BG, 25.11.2010: C++Builder fails handling enumeration indexed properties
     property PrintedSize: TPoint read FPrintedSize; // PrintedSize is available after calling Print().
     property SectionList: ThtDocument read FSectionList;
+    property SelHtml: UTF8String read GetSelHtml;
     property SelLength: Integer read GetSelLength write SetSelLength;
     property SelStart: Integer read FCaretPos write SetSelStart;
     property SelText: UnicodeString read GetSelText;
@@ -699,7 +702,7 @@ type
   public
     Pos: Integer;
     FileType: ThtmlFileType;
-    FormData: TFreeList;
+    FormData: TFormData;
     destructor Destroy; override;
   end;
 
@@ -809,6 +812,7 @@ var
   I: Integer;
 begin
   Ext := LowerCase(ExtractFileExt(S));
+  I := -1;
   if FileTypes.Find(Ext, I) then
     Result := PFileTypeRec(FileTypes.Objects[i]).FileType
   else
@@ -1022,7 +1026,7 @@ begin
   Parser := THtmlParser.Create(FDocument);
   try
     Parser.IsXHTML := True;
-    Parser.ParseHtml(FSectionList, OnInclude, OnSoundRequest, HandleMeta, OnLink);
+    Parser.ParseHtml(FSectionList, OnInclude, OnSoundRequest, HandleMeta, OnLink, MatchMediaQuery);
     Parsed(Parser.Title, Parser.Base, Parser.BaseTarget);
   finally
     Parser.Free;
@@ -1036,7 +1040,7 @@ var
 begin
   Parser := THtmlParser.Create(FDocument);
   try
-    Parser.ParseHtml(FSectionList, OnInclude, OnSoundRequest, HandleMeta, OnLink);
+    Parser.ParseHtml(FSectionList, OnInclude, OnSoundRequest, HandleMeta, OnLink, MatchMediaQuery);
     Parsed(Parser.Title, Parser.Base, Parser.BaseTarget);
   finally
     Parser.Free;
@@ -1094,7 +1098,7 @@ var
   OldFile, OldTitle: ThtString;
   OldPos: Integer;
   OldType: ThtmlFileType;
-  OldFormData: TFreeList;
+  OldFormData: TFormData;
 begin
   if IsProcessing then
     Exit;
@@ -1839,7 +1843,7 @@ begin
           S1 := FCurrentFile + Url
         else
           S1 := HTMLExpandFilename(Url);
-        if CompareText(S, S1) = 0 then
+        if htCompareText(S, S1) = 0 then
           Visited := True;
       end;
   end;
@@ -2815,9 +2819,9 @@ var
 begin
   if HiWord(Value) = 0 then
     ScrollTo(LoWord(Value))
-  else if (Hiword(Value) - 1 < FSectionList.PositionList.Count) then
+  else if Hiword(Value) - 1 < FSectionList.PositionList.Count then
   begin
-    TopPos := TSectionBase(FSectionList.PositionList[HiWord(Value) - 1]).YPosition;
+    TopPos := FSectionList.PositionList[HiWord(Value) - 1].YPosition;
     ScrollTo(TopPos + LoWord(Value));
   end;
 end;
@@ -2886,7 +2890,7 @@ begin
     if Pos('\', Result) = 1 then
       Result := ExpandFilename(Result)
     else if not IsAbsolutePath(Result) then
-      if CompareText(FBase, 'DosPath') = 0 then {let Dos find the path}
+      if htCompareText(FBase, 'DosPath') = 0 then {let Dos find the path}
       else if FBase <> '' then
         Result := CombineDos(HTMLToDos(FBase), Result)
       else
@@ -2901,7 +2905,7 @@ end;
 
 {----------------THtmlViewer.BumpHistory}
 
-procedure THtmlViewer.BumpHistory(const OldFileName, OldTitle: ThtString; OldPos: Integer; OldFormData: TFreeList; OldDocType: ThtmlFileType);
+procedure THtmlViewer.BumpHistory(const OldFileName, OldTitle: ThtString; OldPos: Integer; OldFormData: TFormData; OldDocType: ThtmlFileType);
 var
   I: Integer;
   SameName: Boolean;
@@ -3565,6 +3569,98 @@ begin
   finally
     CopyList.Free;
   end;
+end;
+
+//-- BG ---------------------------------------------------------- 24.10.2016 --
+procedure THtmlViewer.MatchMediaQuery(Sender: TObject; const MediaQuery: ThtMediaQuery; var MediaMatchesQuery: Boolean);
+// Match MediaQuery against Self, resp. Screen.
+
+  function EvaluateExpression(const Expression: ThtMediaExpression): Boolean;
+  var
+    LowStr: ThtString;
+    IValue: Integer;
+
+    function Compared(A, B: Integer): Boolean;
+    begin
+      case Expression.Oper of
+        moLe: Result := A <= B;
+        moEq: Result := A  = B;
+        moGe: Result := A >= B;
+      end;
+    end;
+
+    function ComparedToNumber(Value: Integer; MaxValue: Integer = MaxInt): Boolean;
+    var
+      Num: Integer;
+    begin
+      if Expression.Oper = moIs then
+        Result := Value > 0
+      else
+        Result := TryStrToInt(Expression.Expression, Num) and (Num >= 0) and (Num <= MaxValue) and Compared(Value, Num);
+    end;
+
+    function ComparedToLength(Value, Base: Integer): Boolean;
+    var
+      Len: Integer;
+    begin
+      if Expression.Oper = moIs then
+        Result := Value > 0
+      else
+      begin
+        Len := Abs(Font.Size);
+        Len := LengthConv(Expression.Expression, False, Base, Len, Len div 2, -1);
+        Result := (Len >= 0) and Compared(Value, Len);
+      end;
+    end;
+
+  begin
+    case Expression.Feature of
+      mfWidth       : Result := ComparedToLength(Self.Width   , Self.Width   );
+      mfHeight      : Result := ComparedToLength(Self.Height  , Self.Height  );
+      mfDeviceWidth : Result := ComparedToLength(Screen.Width , Screen.Width );
+      mfDeviceHeight: Result := ComparedToLength(Screen.Height, Screen.Height);
+
+      mfOrientation :
+      begin
+        LowStr := htLowerCase(Expression.Expression);
+        if LowStr = 'landscape' then
+          Result := Self.Width > Self.Height
+        else if LowStr = 'portrait' then
+          Result := Self.Width <= Self.Height
+        else
+          Result := False;
+      end;
+
+      //TODO -oBG, 24.10.2016: get actual color values from Screen or PaintPanel.Canvas?
+
+      mfMonochrome  , // bits per (gray) pixel
+      mfColor       : // minimum bits per red, green, and blue of a pixel
+        Result := ComparedToNumber(8 {bits per color});
+
+      mfColorIndex  :
+        Result := ComparedToNumber(0 {number of palette entries});
+
+      mfGrid        :
+        Result := ComparedToNumber(0 {0 = bitmap, 1 = character grid like tty}, 1);
+    end;
+  end;
+
+var
+  I: Integer;
+  OK: Boolean;
+begin
+  OK := False;
+  if (MediaQuery.MediaType in [mtAll, mtScreen]) xor MediaQuery.Negated then
+  begin
+    for I := Low(MediaQuery.Expressions) to High(MediaQuery.Expressions) do
+    begin
+      OK := EvaluateExpression(MediaQuery.Expressions[I]);
+      if not OK then
+        break;
+    end;
+  end;
+  if OK then
+    MediaMatchesQuery := True;
 end;
 
 function THtmlViewer.CreateHeaderFooter: THtmlViewer;
@@ -4489,47 +4585,57 @@ begin
 end;
 
 procedure THtmlViewer.CopyToClipboard;
+var
+  Len: Integer;
+begin
+  Len := FSectionList.GetSelLength;
+  if Len = 0 then
+    Exit;
 
-  procedure CopyToClipboardAsHtml(HTML: ThtString; StSrc, EnSrc: Integer);
+  Clipboard.Open;
+  try
+    Clipboard.Clear;
 
-    procedure CopyToClipBoard(Utf8: AnsiString; Len: Integer);
-    // Put SOURCE on the clipboard, using FORMAT as the clipboard format
-  {$ifdef LCL}
-    var
-      CF_HTML: UINT;
-    begin
-      CF_HTML := RegisterClipboardFormat('HTML Format'); {not sure this is necessary}
-      Clipboard.AddFormat(CF_HTML, Utf8, Len);
-    end;
-  {$else}
-    var
-      Mem: HGLOBAL;
-      Buf: PAnsiChar;
-      CF_HTML: UINT;
-    begin
-      CF_HTML := RegisterClipboardFormat('HTML Format'); {not sure this is necessary}
-      Mem := GlobalAlloc(GMEM_DDESHARE + GMEM_MOVEABLE, Len + 1);
-      try
-        Buf := GlobalLock(Mem);
-        try
-          Move(Utf8[1], Buf[0], Len);
-          Buf[Len] := #0;
-          SetClipboardData(CF_HTML, Mem);
-        finally
-          GlobalUnlock(Mem);
-        end;
-      except
-        GlobalFree(Mem);
-      end;
-    end;
-  {$endif}
+    CopyToClipboardAsText(SelText);
+    CopyToClipBoardAsHtml(SelHtml);
 
+  finally
+    Clipboard.Close;
+  end;
+end;
+
+function THtmlViewer.GetSelTextBuf(Buffer: PWideChar; BufSize: Integer): Integer;
+begin
+  if BufSize <= 0 then
+    Result := 0
+  else
+    Result := FSectionList.GetSelTextBuf(Buffer, BufSize);
+end;
+
+function THtmlViewer.GetSelText: UnicodeString;
+var
+  Len: Integer;
+begin
+  Len := FSectionList.GetSelLength;
+  if Len > 0 then
+  begin
+    SetString(Result, nil, Len);
+    FSectionList.GetSelTextBuf(Pointer(Result), Len + 1);
+  end
+  else
+    Result := '';
+end;
+
+//-- BG ---------------------------------------------------------- 26.09.2016 --
+function THtmlViewer.GetSelHtml: UTF8String;
+
+  function ToClipboardHtml(HTML: ThtString; StSrc, EnSrc: Integer): UTF8String;
     const
       // about clipboard format: http://msdn.microsoft.com/en-us/library/aa767917%28v=vs.85%29.aspx
       StartFrag: ThtString = '<!--StartFragment-->';
       EndFrag: ThtString = '<!--EndFragment-->';
 
-    function GetCopy(const HTML: ThtString): AnsiString;
+    function GetCopy(const HTML: ThtString): UTF8String;
     const
       PreliminaryHeader: ThtString =
         'Version:1.0'#13#10 +
@@ -4553,14 +4659,12 @@ procedure THtmlViewer.CopyToClipboard;
     var
       Header: ThtString;
       URLString: ThtString;
-      Utf8Header: AnsiString;
-      Utf8Html: AnsiString;
-
-      StartHTMLIndex,
-      EndHTMLIndex,
-      StartFragmentIndex,
+      Utf8Header: UTF8String;
+      Utf8Html: UTF8String;
+      StartHTMLIndex: Integer;
+      EndHTMLIndex: Integer;
+      StartFragmentIndex: Integer;
       EndFragmentIndex: Integer;
-
     begin
       // prepare header (without indexes yet):
       if CurrentFile = '' then
@@ -4687,8 +4791,6 @@ procedure THtmlViewer.CopyToClipboard;
 
   const
     DocType: ThtString = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">'#13#10;
-  var
-    Utf8String: AnsiString;
   begin
   {Truncate beyond EnSrc}
     HTML := Copy(HTML, 1, EnSrc - 1);
@@ -4708,23 +4810,17 @@ procedure THtmlViewer.CopyToClipboard;
   {Add Doctype tag at start and append the EndFrag ThtString}
     HTML := DocType + HTML + EndFrag;
   {Add the header to start}
-    Utf8String := GetCopy(HTML);
-    CopyToClipBoard(Utf8String, Length(Utf8String));
+    Result := GetCopy(HTML);
   end;
 
 var
-  Leng: Integer;
-  StSrc, EnSrc: Integer;
+  Len: Integer;
   HTML: ThtString;
+  StSrc, EnSrc: Integer;
 begin
-  Leng := FSectionList.GetSelLength;
-  if Leng = 0 then
-    Exit;
-  Clipboard.Open;
-  try
-    Clipboard.Clear;
-    FSectionList.CopyToClipboardA(Leng + 1);
-
+  Len := FSectionList.GetSelLength;
+  if Len > 0 then
+  begin
     HTML := DocumentSource;
     StSrc := FindSourcePos(FSectionList.SelB);
     EnSrc := FindSourcePos(FSectionList.SelE);
@@ -4753,29 +4849,7 @@ begin
     else
       Inc(EnSrc);
 
-    CopyToClipboardAsHtml(Html, StSrc, EnSrc);
-  finally
-    Clipboard.Close;
-  end;
-end;
-
-function THtmlViewer.GetSelTextBuf(Buffer: PWideChar; BufSize: Integer): Integer;
-begin
-  if BufSize <= 0 then
-    Result := 0
-  else
-    Result := FSectionList.GetSelTextBuf(Buffer, BufSize);
-end;
-
-function THtmlViewer.GetSelText: UnicodeString;
-var
-  Len: Integer;
-begin
-  Len := FSectionList.GetSelLength;
-  if Len > 0 then
-  begin
-    SetString(Result, nil, Len);
-    FSectionList.GetSelTextBuf(Pointer(Result), Len + 1);
+    Result := ToClipboardHtml(Html, StSrc, EnSrc);
   end
   else
     Result := '';
@@ -5001,7 +5075,7 @@ begin
   if Assigned(OnMeta) then
     OnMeta(Self, HttpEq, Name, Content);
   if Assigned(OnMetaRefresh) then
-    if CompareText(Lowercase(HttpEq), 'refresh') = 0 then
+    if htCompareText(htLowerCase(HttpEq), 'refresh') = 0 then
     begin
       I := Pos(';', Content);
       if I > 0 then
@@ -5078,15 +5152,18 @@ begin
     PaintPanel.OnDragOver := nil;
 end;
 
-function THtmlViewer.GetFormData: TFreeList;
+function THtmlViewer.GetFormData: TFormData;
 begin
-  if Assigned(SectionList) then
-    Result := SectionList.GetFormControlData
+  if Assigned(SectionList) and Assigned(SectionList.HtmlFormList) and (SectionList.HtmlFormList.Count > 0) then
+  begin
+    Result := TFormData.Create;
+    SectionList.GetFormControlData(Result);
+  end
   else
     Result := nil;
 end;
 
-procedure THtmlViewer.SetFormData(T: TFreeList);
+procedure THtmlViewer.SetFormData(T: TFormData);
 begin
   if Assigned(SectionList) and Assigned(T) then
     SectionList.SetFormControlData(T);
@@ -5097,6 +5174,7 @@ var
   I: Integer;
   OldPos: Integer;
 begin
+  I := -1;
   if FNameList.Find(NameID, I) then
     if FNameList.Objects[I] is TImageObj then
     begin
@@ -5118,6 +5196,7 @@ var
   Obj: TIDObject;
 begin
   Result := nil;
+  I := -1;
   with FSectionList.IDNameList do
     if Find(ID, I) then
     begin
@@ -5136,6 +5215,7 @@ var
   Obj: TIDObject;
 begin
   Result := pdUnassigned;
+  I := -1;
   with FSectionList.IDNameList do
     if Find(ID, I) then
     begin
@@ -5150,6 +5230,7 @@ var
   I: Integer;
   Obj: TIDObject;
 begin
+  I := -1;
   with FSectionList.IDNameList do
     if Find(ID, I) then
     begin

@@ -1,14 +1,14 @@
-object Form1: TForm1
-  Left = 876
+object FormJSDemo: TFormJSDemo
+  Left = 837
   Height = 505
-  Top = 178
+  Top = 177
   Width = 762
-  Caption = 'Frame Demo'
+  Caption = 'JavaScript Demo'
   ClientHeight = 485
   ClientWidth = 762
   Font.Height = -13
   Font.Name = 'System'
-  Menu = MainMenu1
+  Menu = MainMenu
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnShow = FormShow
@@ -45,6 +45,7 @@ object Form1: TForm1
     OnProcessing = ProcessingHandler
     OnProgress = FrameViewerProgress
     OnRightClick = FrameViewerRightClick
+    OnScript = FrameViewerScript
     OnSoundRequest = SoundRequest
     Align = alClient
     TabOrder = 0
@@ -146,7 +147,7 @@ object Form1: TForm1
       TabOrder = 2
     end
   end
-  object MainMenu1: TMainMenu
+  object MainMenu: TMainMenu
     left = 328
     top = 72
     object File1: TMenuItem
@@ -231,6 +232,21 @@ object Form1: TForm1
           RadioItem = True
           OnClick = mmiQuirksModeQuirksClick
         end
+      end
+      object ShowLog: TMenuItem
+        Caption = 'Show Log'
+        OnClick = ShowLogClick
+      end
+      object N5: TMenuItem
+        Caption = '-'
+      end
+      object LogDiag: TMenuItem
+        Caption = 'Log Diagnostics'
+        OnClick = LogDiagClick
+      end
+      object LogScript: TMenuItem
+        Caption = 'Log JS Script'
+        OnClick = LogScriptClick
       end
     end
     object HistoryMenuItem: TMenuItem

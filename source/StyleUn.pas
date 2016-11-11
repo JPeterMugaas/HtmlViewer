@@ -77,7 +77,7 @@ var
   PreFontConv: array[1..7] of Double;
 
 type
-  // Notice: in TPropertyIndex order of rectangle properties required:
+  // Notice: in ThtPropertyIndex order of rectangle properties required:
   //
   //  Top, Right, Bottom, Left.
   //
@@ -193,8 +193,9 @@ type
     constructor Create(const AUseQuirksMode : Boolean); overload; // for use in style list only
     constructor Create(APropStack: TPropStack; const AUseQuirksMode : Boolean); overload; // for use in property stack
     constructor CreateCopy(ASource: TProperties);
-
     destructor Destroy; override;
+    function Clone: TProperties; virtual;
+
     function BorderStyleNotBlank: Boolean;
     function Collapse: Boolean;
     function GetBackgroundColor: TColor;
@@ -800,6 +801,16 @@ begin
   FUseQuirksMode := AUseQuirksMode;
 end;
 
+//-- BG ---------------------------------------------------------- 21.10.2016 --
+function TProperties.Clone: TProperties;
+begin
+  Result := TProperties.CreateCopy(Self);
+
+  Result.Props := Props;
+  Result.Originals := Originals;
+  Result.Important := Important;
+end;
+
 //-- BG ---------------------------------------------------------- 20.01.2013 --
 constructor TProperties.CreateCopy(ASource: TProperties);
 begin
@@ -911,6 +922,8 @@ begin
     else
       case I of
         MarginTop..BorderLeftStyle,
+        piMinHeight, piMinWidth,
+        piMaxHeight, piMaxWidth,
         piWidth, piHeight,
         piTop..piLeft:
           Props[I] := IntNull;
@@ -2843,7 +2856,7 @@ var
     end;
 
     for I := 1 to AMax do
-      if CompareText(Result, Generic1[I]) = 0 then
+      if htCompareText(Result, Generic1[I]) = 0 then
       begin
         Result := Generic2[I];
         break;
@@ -3148,6 +3161,7 @@ var
   Propty1: TProperties;
   I: Integer;
 begin
+  I := -1;
   if Find('table', I) then
   begin
     Propty1 := TProperties(Objects[I]);
@@ -3192,6 +3206,7 @@ begin
   {$endif}
   if TryStrToPropIndex(Prop, PropIndex) then
   begin
+    I := -1;
     if not Find(Selector, I) then
     begin
       NewProp := True;
@@ -3257,6 +3272,7 @@ procedure TStyleList.ModifyLinkColor(Pseudo: ThtString; AColor: TColor);
 var
   I: Integer;
 begin
+  I := -1;
   if Find('::' + Pseudo, I) then {the defaults}
     with TProperties(Objects[I]) do
       Props[Color] := AColor;
@@ -3807,6 +3823,7 @@ begin
   I := Pos('rgb', S);
   if (I = 0) and (S[1] <> '#') then
   begin
+    Idx := -1;
     if SortedColors.Find(S, Idx) then
     begin
       Color := PColor(SortedColors.Objects[Idx])^;
@@ -3859,7 +3876,7 @@ begin
 end;
 
 //BG, 14.07.2010:
-function decodeSize(const Str: ThtString; out V: extended; out U: ThtString): Boolean;
+function DecodeSize(const Str: ThtString; out V: extended; out U: ThtString): Boolean;
  {$ifdef UseInline} inline; {$endif}
 var
   I, J, L: Integer;
@@ -3958,7 +3975,7 @@ var
   U: ThtString;
   i : Integer;
 begin
-  if decodeSize(Str, V, U) then
+  if DecodeSize(Str, V, U) then
   begin
     if U = 'in' then
       Result := V * 72.0
@@ -4016,18 +4033,17 @@ end;
 
 {----------------LengthConv}
 
-function LengthConv(const Str: ThtString; Relative: Boolean; Base, EmSize, ExSize,
-  Default: Integer): Integer;
+function LengthConv(const Str: ThtString; Relative: Boolean; Base, EmSize, ExSize, Default: Integer): Integer;
  {$ifdef UseInline} inline; {$endif}
 {given a length ThtString, return the appropriate pixel value.  Base is the
  base value for percentage. EmSize, ExSize for units relative to the font.
  Relative makes a numerical entry relative to Base.
  Default returned if no match.}
 var
-  V: extended;
+  V: Extended;
   U: ThtString;
 begin
-  if decodeSize(Str, V, U) then
+  if DecodeSize(Str, V, U) then
   begin
     {U the units}
     if U = '' then

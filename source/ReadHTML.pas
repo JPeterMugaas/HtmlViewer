@@ -146,6 +146,7 @@ type
     SoundEvent: TSoundType;
     MetaEvent: TMetaType;
     LinkEvent: TLinkType;
+    MatchMediaQuery: ThtMediaQueryEvent;
 
     FUseQuirksMode : Boolean;
     FPropStack: THtmlPropStack;
@@ -177,7 +178,7 @@ type
     procedure DoP(const TermSet: TElemSymbSet);
     procedure DoScript(Ascript: TScriptEvent);
     procedure DoSound;
-    procedure DoStyle(var C: ThtChar; Doc: TBuffer; const APath: ThtString; FromLink: Boolean);
+    procedure DoStyle(var C: ThtChar; Doc: TBuffer; const APath, AMedia: ThtString; FromLink: Boolean);
     procedure DoStyleLink;
     procedure DoTable;
     procedure DoText;
@@ -203,7 +204,7 @@ type
     function ShouldUseQuirksMode: Boolean;
     function IsFrame(FrameViewer: TFrameViewerBase): Boolean;
     procedure ParseFrame(FrameViewer: TFrameViewerBase; FrameSet: TObject; const FName: ThtString; AMetaEvent: TMetaType);
-    procedure ParseHtml(ASectionList: ThtDocument; AIncludeEvent: TIncludeType; ASoundEvent: TSoundType; AMetaEvent: TMetaType; ALinkEvent: TLinkType);
+    procedure ParseHtml(ASectionList: ThtDocument; AIncludeEvent: TIncludeType; ASoundEvent: TSoundType; AMetaEvent: TMetaType; ALinkEvent: TLinkType; AMatchMediaQuery: ThtMediaQueryEvent);
     procedure ParseText(ASectionList: ThtDocument);
     property Base: ThtString read FBase;
     property BaseTarget: ThtString read FBaseTarget;
@@ -1080,6 +1081,7 @@ procedure THtmlParser.Next;
       if not GetID(St) then
         Exit; {no ID}
 
+      I := -1;
       if AttributeNames.Find(St, I) then
         Sym := PSymbol(AttributeNames.Objects[I]).Value;
       SkipWhiteSpace;
@@ -1186,6 +1188,7 @@ procedure THtmlParser.Next;
 
     if Length(Compare) > 0 then
     begin
+      I := -1;
       if ElementNames.Find(htUpperCase(Compare), I) then
         if not Result then
           Sy := PResWord(ElementNames.Objects[I]).Symbol
@@ -1273,6 +1276,7 @@ begin
   if Attributes <> nil then
   begin
     PropertiesOfStyleAttribute := nil;
+    T := nil;
     if Attributes.Find(StyleAttrSy, T) then
     begin
       PropertiesOfStyleAttribute := TProperties.Create;
@@ -1418,6 +1422,7 @@ var
   S: ThtString;
 begin
   Result := '';
+  T := nil;
   if Attributes.Find(AlignSy, T) then
   begin
     S := LowerCase(T.Name);
@@ -1458,7 +1463,7 @@ var
   IsInline: Boolean;
 begin
   case Sym of
-    DivSy, MainSy, HeaderSy, NavSy, SectionSy, ArticleSy, AsideSy, FooterSy, HGroupSy:
+    DivSy, MainSy, HeaderSy, NavSy, SectionSy, ArticleSy, AsideSy, FooterSy, HGroupSy, BlockQuoteSy:
       begin
         SectionList.Add(Section, TagIndex);
         PushNewProp(Sym, Attributes);
@@ -1596,18 +1601,18 @@ begin
         end;
       until Sy <> FormSy; {in case <form> terminated by andother <form>}
 
-    BlockQuoteSy, AddressSy:
+    AddressSy:
       begin
         SectionList.Add(Section, TagIndex);
         Section := nil;
-        DoLists(Sy, TermSet + [BlockQuoteEndSy, AddressEndSy]);
-        if Sy in [BlockQuoteEndSy, AddressEndSy] then
+        DoLists(Sy, TermSet + [AddressEndSy]);
+        if Sy in [AddressEndSy] then
           Next;
       end;
 
     StyleSy:
       begin
-        DoStyle(LCh, Doc, '', False);
+        DoStyle(LCh, Doc, '', '', False);
         Next;
       end;
 
@@ -1618,8 +1623,8 @@ end;
 
 type
   TCellManager = class(ThtStringList)
-    Table: ThtmlTable;
-    constructor Create(ATable: ThtmlTable);
+    Table: THtmlTable;
+    constructor Create(ATable: THtmlTable);
     function FindColNum(Row: Integer): Integer;
     procedure AddCell(Row: Integer; CellObj: TCellObj);
   end;
@@ -1631,7 +1636,7 @@ type
 }
 {----------------TCellManager.Create}
 
-constructor TCellManager.Create(ATable: ThtmlTable);
+constructor TCellManager.Create(ATable: THtmlTable);
 begin
   inherited Create;
   Table := ATable;
@@ -1696,8 +1701,8 @@ end;
 
 procedure THtmlParser.DoTable;
 
-  procedure DoColGroup(Table: ThtmlTable; ColOK: Boolean);
-  {reads the <colgroup> and <col> tags.  Put the info in ThtmlTable's Cols list}
+  procedure DoColGroup(Table: THtmlTable; ColOK: Boolean);
+  {reads the <colgroup> and <col> tags.  Put the info in THtmlTable's Cols list}
 
     procedure ReadColAttributes(var Spec: TSpecWidth; var Valign: ThtAlignmentStyle; var Align: ThtString; var Span: Integer);
 
@@ -1792,7 +1797,7 @@ procedure THtmlParser.DoTable;
   end;
 
 var
-  Table: ThtmlTable;
+  Table: THtmlTable;
   SaveSectionList, JunkSaveSectionList: TCellBasic;
   SaveStyle: TFontStyles;
   SaveNoBreak: Boolean;
@@ -1825,6 +1830,7 @@ var
     T: TAttribute;
   begin
     Result := Default;
+    T := nil;
     if Attributes.Find(VAlignSy, T) then
     begin
       S := htLowerCase(T.Name);
@@ -1947,10 +1953,10 @@ begin
     else
       SetJustify := NoJustify;
     PushNewProp(TableSy, Attributes);
-    Table := ThtmlTable.Create(SaveSectionList, Attributes, PropStack.Last);
-    NewBlock := TTableBlock.Create(SaveSectionList, Attributes, PropStack.Last, Table, TableLevel);
+    NewBlock := TTableBlock.Create(SaveSectionList, Attributes, PropStack.Last, TableLevel);
     if (NewBlock.Justify <> Centered) and not (NewBlock.Floating in [ALeft, ARight]) then
       NewBlock.Justify := SetJustify;
+    Table := NewBlock.Table;
     NewBlock.MyCell.Add(Table, TagIndex); {the only item in the cell}
     CombineBlock := TTableAndCaptionBlock.Create(SaveSectionList, Attributes, PropStack.Last, NewBlock); {will be needed if Caption found}
     CM := nil;
@@ -2061,6 +2067,7 @@ begin
 
               CellObj := TCellObj.Create(NewBlock, VAlign, Attributes, PropStack.Last);
               SectionList := CellObj.Cell;
+              T := nil;
               if ((CellObj.SpecWd.Value = 0) or (CellObj.SpecWd.VType <> wtAbsolute))
                 and (Attributes.Find(NoWrapSy, T) or (PropStack.Last.Props[piWhiteSpace] = 'nowrap')) then
                 NoBreak := True {this seems to be what IExplorer does}
@@ -2076,9 +2083,8 @@ begin
             begin
               if InHref then
                 DoAEnd;
-              if Assigned(PropStack.Document) then begin
+              if Assigned(PropStack.Document) then
                 PropStack.Document.CurrentStyle := SaveStyle;
-              end;
               NoBreak := False;
               AddSection;
               if Attributes.Find(AlignSy, T) then
@@ -2215,7 +2221,7 @@ begin
         CombineBlock.Free; {wasn't needed}
         SectionList.Add(NewBlock, TagIndex);
       end;
-      PopaProp(TableSy);
+      PopAProp(TableSy);
       if Assigned(PropStack.Document) then begin
         PropStack.Document.CurrentStyle := SaveStyle;
       end;
@@ -2261,6 +2267,7 @@ begin
           InOption := Sy = OptionSy;
           if InOption then
           begin
+            T := nil;
             Selected := Attributes.Find(SelectedSy, T);
             Attr := Attributes.CreateStringList;
           end;
@@ -2290,6 +2297,7 @@ begin
   Item := TMapItem.Create;
   ErrorCnt := 0;
   try
+    T := nil;
     if Attributes.Find(NameSy, T) then
       Item.MapName := Uppercase(T.Name);
     Next;
@@ -2347,7 +2355,7 @@ var
         htAppendChr(Text, LCh);
         GetCh;
       end;
-      if CompareText(Text, '</script') = 0 then
+      if htCompareText(Text, '</script') = 0 then
         Sy := ScriptEndSy;
       Count := 0;
       while Count < 6 do
@@ -2413,6 +2421,7 @@ begin
       InScript := True;
       try
         GetCh; {get character here with Inscript set to allow immediate comment}
+        T := nil;
 
         if Attributes.Find(TypeSy, T) then
           Lang := T.Name
@@ -2500,6 +2509,7 @@ begin
 
         Params := ThtStringList.Create;
         try
+          T := nil;
           Params.Sorted := False;
           repeat
             SavePosition;
@@ -2731,6 +2741,7 @@ procedure THtmlParser.DoCommonSy;
       DoAEnd;
     FoundHRef := False;
     Link := '';
+    T := nil;
     for I := 0 to Attributes.Count - 1 do
       with Attributes[I] do
         if Which = HRefSy then
@@ -3181,7 +3192,7 @@ procedure THtmlParser.DoCommonSy;
 
                 StyleSy:
                   begin
-                    DoStyle(LCh, Doc, '', False);
+                    DoStyle(LCh, Doc, '', '', False);
                     Next;
                   end;
               end;
@@ -3330,7 +3341,12 @@ begin
       end;
     
     ObjectSy:
-      DoObjectTag(C, N, IX);
+      begin
+        C := LCh;
+        N := Doc.Position;
+        IX := PropStack.SIndex;
+        DoObjectTag(C, N, IX);
+      end;
 
     ObjectEndSy:
       Next;
@@ -3528,14 +3544,17 @@ begin
       end;
 
     PreSy:
-      if not Attributes.Find(WrapSy, T) then
-        DoPre
-      else
       begin
-        SectionList.Add(Section, TagIndex);
-        Section := nil;
-        PushNewProp(SaveSy, Attributes);
-        Next;
+        T := nil;
+        if not Attributes.Find(WrapSy, T) then
+          DoPre
+        else
+        begin
+          SectionList.Add(Section, TagIndex);
+          Section := nil;
+          PushNewProp(SaveSy, Attributes);
+          Next;
+        end;
       end;
 
     PreEndSy:
@@ -3555,7 +3574,7 @@ begin
 
     StyleSy:
       begin
-        DoStyle(LCh, Doc, '', False);
+        DoStyle(LCh, Doc, '', '', False);
         Next;
       end;
   else
@@ -3659,6 +3678,7 @@ begin
   if BRSy in TermSet then
     Exit;
 
+  T := nil;
   L := nil;
   PushNewProp(BRSy, Attributes);
   HasClear := Attributes.Find(ClearSy, T) or VarIsStr(PropStack.Last.Props[Clear]);
@@ -3817,6 +3837,7 @@ begin
   if EndSym = CommandSy then
     EndSym := HtmlSy;
   Plain := False;
+  T := nil;
   case Sym of
     OLSy:
       begin
@@ -3938,8 +3959,10 @@ var
   Loop: Integer;
   T, T1: TAttribute;
 begin
+  T := nil;
   if Assigned(SoundEvent) and Attributes.Find(SrcSy, T) then
   begin
+    T1 := nil;
     if Attributes.Find(LoopSy, T1) then
       Loop := T1.Value
     else
@@ -3956,6 +3979,7 @@ var
   T: TAttribute;
   HttpEq, Name, Content: ThtString;
 begin
+  T := nil;
   if Attributes.Find(HttpEqSy, T) then
     HttpEq := T.Name
   else
@@ -3972,7 +3996,7 @@ begin
   end
   else
     Content := '';
-  if (Sender is THtmlViewer) and (CompareText(HttpEq, 'content-type') = 0) then
+  if (Sender is THtmlViewer) and (htCompareText(HttpEq, 'content-type') = 0) then
   begin
     DoCharset(Content);
   end;
@@ -3996,10 +4020,11 @@ begin
 end;
 
 //-- BG ---------------------------------------------------------- 29.09.2016 --
-procedure THtmlParser.DoStyle(var C: ThtChar; Doc: TBuffer; const APath: ThtString; FromLink: Boolean);
+procedure THtmlParser.DoStyle(var C: ThtChar; Doc: TBuffer; const APath, AMedia: ThtString; FromLink: Boolean);
 var
   IsCss: Boolean;
   I: Integer;
+  Parser: THtmlStyleTagParser;
 begin
   IsCss := True;
   for I := 0 to  Attributes.Count - 1 do
@@ -4010,7 +4035,15 @@ begin
       end;
 
   if IsCss then
-    StylePars.DoStyle(PropStack.Document.Styles, C, Doc, APath, FromLink, FUseQuirksMode)
+  begin
+    Parser := THtmlStyleTagParser.Create(FUseQuirksMode);
+    Parser.OnMatchMediaQuery := MatchMediaQuery;
+    try
+      Parser.DoStyle(PropStack.Document.Styles, C, Doc, APath, AMedia, FromLink);
+    finally
+      Parser.Free;
+    end;
+  end
   else if not IsXhtmlEndSy and not FromLink then
   begin
     GetCh; {make up for not having next character on entry}
@@ -4025,8 +4058,8 @@ var
   Style: TBuffer;
   C: ThtChar;
   I: Integer;
-  Url, Rel, Rev: ThtString;
-  OK: Boolean;
+  Url, Rel, Rev, Media: ThtString;
+  IsStyleSheet: Boolean;
   Request: TGetStreamEvent;
   Requested: TGottenStreamEvent;
   Stream: TStream;
@@ -4046,15 +4079,15 @@ var
   end;
 
 begin
-  OK := False;
+  IsStyleSheet := False;
   for I := 0 to Attributes.Count - 1 do
     with Attributes[I] do
       case Which of
         RelSy:
           begin
             Rel := Name;
-            if CompareText(Rel, 'stylesheet') = 0 then
-              OK := True;
+            if htCompareText(Rel, 'stylesheet') = 0 then
+              IsStyleSheet := True;
           end;
 
         RevSy:
@@ -4064,21 +4097,16 @@ begin
           Url := Name;
 
         MediaSy:
-          //BG, 12.02.2011: currently we cannot distinguish media, therefore process 'screen' only.
-          if (Pos('screen', Name) = 0) and (Pos('all', Name) = 0) then
-          begin
-            OK := False;
-            break;
-          end;
+          Media := Name;
       end;
-  if OK and (Url <> '') then
+  if IsStyleSheet and (Url <> '') then
   begin
     Stream := nil;
     FreeStream := False;
     Requested := nil;
     try
       try
-        Viewer := (CallingObject as THtmlViewer);
+        Viewer := CallingObject as THtmlViewer;
         Request := Viewer.OnHtStreamRequest;
         Requested := Viewer.OnHtStreamRequested;
         if Assigned(Request) then
@@ -4110,7 +4138,8 @@ begin
           Style := TBuffer.Create(Stream, Url);
           try
             C := SpcChar;
-            DoStyle(C, Style, Path, True);
+
+            DoStyle(C, Style, Path, Media, True);
           finally
             Style.Free;
           end;
@@ -4268,7 +4297,7 @@ begin
                     MarginHeightSy, TopMarginSy:
                       AMarginHeight := Min(Max(0, Value), 200);
                     BGPropertiesSy:
-                      if CompareText(Name, 'fixed') = 0 then
+                      if htCompareText(Name, 'fixed') = 0 then
                         PropStack.Last.Assign('fixed', BackgroundAttachment);
                   end;
               if FUseQuirksMode then
@@ -4441,7 +4470,7 @@ end;
 //-- BG ---------------------------------------------------------- 27.12.2010 --
 procedure THtmlParser.ParseHtml(ASectionList: ThtDocument;
   AIncludeEvent: TIncludeType; ASoundEvent: TSoundType;
-  AMetaEvent: TMetaType; ALinkEvent: TLinkType);
+  AMetaEvent: TMetaType; ALinkEvent: TLinkType; AMatchMediaQuery: ThtMediaQueryEvent);
 {$IFNDEF NoTabLink}
 const
   MaxTab = 400; {maximum number of links before tabbing of links aborted}
@@ -4489,6 +4518,7 @@ begin
       try
         GetCh; {get the reading started}
         Next;
+        T := nil;
         while Sy <> EofSy do
         begin
           if (Sy = ASy) and Attributes.Find(HrefSy, T) then
@@ -4524,6 +4554,7 @@ begin
       SoundEvent := ASoundEvent;
       MetaEvent := AMetaEvent;
       LinkEvent := ALinkEvent;
+      MatchMediaQuery := AMatchMediaQuery;
       try
         GetCh; {get the reading started}
         //Next;
@@ -4795,6 +4826,7 @@ function TryShorterEntity(Entity: ThtString; out I: Integer; var Collect: ThtStr
 var
   J: Integer;
 begin
+  I := -1;
   J := Length(Entity);
   while J > 2 do
   begin
